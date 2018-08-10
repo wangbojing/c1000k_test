@@ -1,4 +1,9 @@
 
+/*
+ * author : wangbojing
+ * email  : 1989wangbojing@163.com 
+ * 测试操作系统的并发量
+ */
 
 
 #include <stdio.h>
@@ -358,6 +363,7 @@ static int nSend(int sockfd, const void *buffer, int length, int flags) {
 
 static int curfds = 1;
 static int nRun = 0;
+int sockfds[MAX_PORT] = {0};
 	
 
 void client_job(job_t *job) {
@@ -394,12 +400,14 @@ void client_data_process(int clientfd) {
 	char buffer[MAX_BUFFER];
 	bzero(buffer, MAX_BUFFER);
 	int length = 0;
-	int ret = nRecv(clientfd, buffer, MAX_BUFFER, &length);
+	//int ret = nRecv(clientfd, buffer, MAX_BUFFER, &length);
+	int ret = recv(clientfd, buffer, MAX_BUFFER, 0);
 	if (length > 0) {	
 		if (nRun || buffer[0] == 'a') {		
 			printf(" TcpRecv --> curfds : %d, buffer: %s\n", curfds, buffer);
 			
-			nSend(clientfd, buffer, strlen(buffer), 0);
+			//nSend(clientfd, buffer, strlen(buffer), 0);
+			send(clientfd, buffer, strlen(buffer), 0);
 		}
 
 	} else if (ret == ENOTCONN) {
@@ -422,59 +430,21 @@ int listenfd(int fd, int *fds) {
 	return 0;
 }
 
-int main(void) {
+struct timeval tv_begin;
+struct timeval tv_cur;
+
+void *listen_thread(void *arg) {
+
 	int i = 0;
-	int sockfds[MAX_PORT] = {0};
-
-	printf("C1000K Server Start\n");
-	
-	threadpool_init(); //
-
-	int epoll_fd = epoll_create(MAX_EPOLLSIZE); 
-
-	for (i = 0;i < MAX_PORT;i ++) {
-
-		int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-		if (sockfd < 0) {
-			perror("socket");
-			return 1;
-		}
-
-		struct sockaddr_in addr;
-		memset(&addr, 0, sizeof(struct sockaddr_in));
-		
-		addr.sin_family = AF_INET;
-		addr.sin_port = htons(SERVER_PORT+i);
-		addr.sin_addr.s_addr = INADDR_ANY;
-
-		if (bind(sockfd, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) < 0) {
-			perror("bind");
-			return 2;
-		}
-
-		if (listen(sockfd, 5) < 0) {
-			perror("listen");
-			return 3;
-		}
-
-		sockfds[i] = sockfd;
-		printf("C1000K Server Listen on Port:%d\n", SERVER_PORT+i);
-
-		struct epoll_event ev;
-		 
-		ev.events = EPOLLIN | EPOLLET; //EPOLLLT
-		ev.data.fd = sockfd;
-		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sockfd, &ev);  
-	}
-
-	struct timeval tv_begin;
-	gettimeofday(&tv_begin, NULL);
-	
+	int epoll_fd = *(int *)arg;
 	struct epoll_event events[MAX_EPOLLSIZE];
+
+	
+	gettimeofday(&tv_begin, NULL);
 
 	while (1) {
 
-		int nfds = epoll_wait(epoll_fd, events, curfds, 5);  //是不是秘书给累死。
+		int nfds = epoll_wait(epoll_fd, events, curfds, 5);  
 		if (nfds == -1) {
 			perror("epoll_wait");
 			break;
@@ -490,7 +460,7 @@ int main(void) {
 				int clientfd = accept(sockfd, (struct sockaddr*)&client_addr, &client_len);
 				if (clientfd < 0) {
 					perror("accept");
-					return 4;
+					return NULL;
 				}
 				
 				if (curfds ++ > 1000 * 1000) {
@@ -506,12 +476,12 @@ int main(void) {
 				}
 #else
 				if (curfds % 1000 == 999) {
-					struct timeval tv_cur;
-					memcpy(&tv_cur, &tv_begin, sizeof(struct timeval));
 					
+					memcpy(&tv_cur, &tv_begin, sizeof(struct timeval));
+			
 					gettimeofday(&tv_begin, NULL);
-
 					int time_used = TIME_SUB_MS(tv_begin, tv_cur);
+					
 					printf("connections: %d, sockfd:%d, time_used:%d\n", curfds, clientfd, time_used);
 				}
 #endif
@@ -545,12 +515,79 @@ int main(void) {
 				}
 #else
 				client_data_process(clientfd);
-				
 #endif
 			}
 		}
 		
 	}
+	
+}
+
+int main(void) {
+	int i = 0;
+
+	printf("C1000K Server Start\n");
+	
+	threadpool_init(); //
+
+
+#if 0
+	int epoll_fd = epoll_create(MAX_EPOLLSIZE); 
+#else
+
+	int epoll_fds[CPU_CORES_SIZE] = {0};
+	pthread_t thread_id[CPU_CORES_SIZE] = {0};
+
+	for (i = 0;i < CPU_CORES_SIZE;i ++) {
+		epoll_fds[i] = epoll_create(MAX_EPOLLSIZE);
+
+		pthread_create(&thread_id[i], NULL, listen_thread, &epoll_fds[i]);
+	}
+
+
+#endif
+	for (i = 0;i < MAX_PORT;i ++) {
+
+		int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		if (sockfd < 0) {
+			perror("socket");
+			return 1;
+		}
+
+		struct sockaddr_in addr;
+		memset(&addr, 0, sizeof(struct sockaddr_in));
+		
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons(SERVER_PORT+i);
+		addr.sin_addr.s_addr = INADDR_ANY;
+
+		if (bind(sockfd, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) < 0) {
+			perror("bind");
+			return 2;
+		}
+
+		if (listen(sockfd, 5) < 0) {
+			perror("listen");
+			return 3;
+		}
+
+		sockfds[i] = sockfd;
+		printf("C1000K Server Listen on Port:%d\n", SERVER_PORT+i);
+
+		struct epoll_event ev;
+		 
+		ev.events = EPOLLIN | EPOLLET; //EPOLLLT
+		ev.data.fd = sockfd;
+		epoll_ctl(epoll_fds[i%CPU_CORES_SIZE], EPOLL_CTL_ADD, sockfd, &ev);  
+	}
+
+	for (i = 0;i < CPU_CORES_SIZE;i ++) {
+		pthread_join(thread_id[i], NULL);
+	}
+
+
+	getchar();
+	printf("end\n");
 }
 
 
