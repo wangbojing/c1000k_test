@@ -428,11 +428,17 @@ int listenfd(int fd, int *fds) {
 	return 0;
 }
 
+struct timeval tv_begin;
+struct timeval tv_cur;
+
 void *listen_thread(void *arg) {
 
 	int i = 0;
 	int epoll_fd = *(int *)arg;
 	struct epoll_event events[MAX_EPOLLSIZE];
+
+	
+	gettimeofday(&tv_begin, NULL);
 
 	while (1) {
 
@@ -469,7 +475,12 @@ void *listen_thread(void *arg) {
 #else
 				if (curfds % 1000 == 999) {
 					
-					printf("connections: %d, sockfd:%d\n", curfds, clientfd);
+					memcpy(&tv_cur, &tv_begin, sizeof(struct timeval));
+			
+					gettimeofday(&tv_begin, NULL);
+					int time_used = TIME_SUB_MS(tv_begin, tv_cur);
+					
+					printf("connections: %d, sockfd:%d, time_used:%d\n", curfds, clientfd, time_used);
 				}
 #endif
 				ntySetNonblock(clientfd);
